@@ -1,0 +1,578 @@
+/**
+ * SlopeGuard — Main UI Interactions & Accessibility
+ * Handles navigation, mobile menu, active link tracking, and scroll effects
+ */
+
+document.addEventListener('DOMContentLoaded', () => {
+  initNavbarScroll();
+  initMobileMenu();
+  initNavigationAndScrollTracking();
+  initScrollAnimations();
+  initRiskIntelligenceMap();
+});
+
+/**
+ * Global reference to close mobile menu cleanly
+ */
+let closeMobileMenuHandler = null;
+
+/**
+ * Header scroll state (adds .scrolled class for frosted glass on scroll)
+ */
+function initNavbarScroll() {
+  const header = document.querySelector('.site-header');
+  if (!header) return;
+
+  const handleScroll = () => {
+    if (window.scrollY > 20) {
+      header.classList.add('scrolled');
+    } else {
+      header.classList.remove('scrolled');
+    }
+  };
+
+  window.addEventListener('scroll', handleScroll, { passive: true });
+  handleScroll(); // Initial check
+}
+
+/**
+ * Mobile Navigation Drawer & Keyboard Accessibility
+ */
+function initMobileMenu() {
+  const toggleBtn = document.querySelector('.mobile-toggle');
+  const navMenu = document.querySelector('.nav-bar') || document.querySelector('.nav-links');
+  if (!toggleBtn || !navMenu) return;
+
+  const toggleMenu = (open) => {
+    const isOpen = open !== undefined ? open : !navMenu.classList.contains('nav-open');
+    if (isOpen) {
+      navMenu.classList.add('nav-open');
+      toggleBtn.setAttribute('aria-expanded', 'true');
+      toggleBtn.innerHTML = `
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      `;
+      document.body.style.overflow = 'hidden';
+    } else {
+      navMenu.classList.remove('nav-open');
+      toggleBtn.setAttribute('aria-expanded', 'false');
+      toggleBtn.innerHTML = `
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      `;
+      document.body.style.overflow = '';
+    }
+  };
+
+  closeMobileMenuHandler = () => toggleMenu(false);
+
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMenu();
+  });
+
+  // Close on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && navMenu.classList.contains('nav-open')) {
+      toggleMenu(false);
+      toggleBtn.focus();
+    }
+  });
+
+  // Close when clicking outside of menu on mobile
+  document.addEventListener('click', (e) => {
+    if (navMenu.classList.contains('nav-open') && 
+        !navMenu.contains(e.target) && 
+        !toggleBtn.contains(e.target)) {
+      toggleMenu(false);
+    }
+  });
+}
+
+/**
+ * Navigation Click Behavior & Automatic Active Section Scroll Tracking
+ */
+function initNavigationAndScrollTracking() {
+  const header = document.querySelector('.site-header');
+  const navLinks = document.querySelectorAll('.nav-links .nav-link[href^="#"]');
+  const trackedSections = Array.from(document.querySelectorAll('section[id]'));
+  const allAnchorLinks = document.querySelectorAll('a[href^="#"]');
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  if (!trackedSections.length || !navLinks.length) return;
+
+  let isClickScrolling = false;
+  let clickScrollTimer = null;
+  let isScrollTicking = false;
+
+  /**
+   * Set active state on the matching nav link and clear from others
+   * Sets .active, .is-active, and aria-current="location"
+   */
+  function setActiveNavLink(activeId) {
+    navLinks.forEach(link => {
+      const href = link.getAttribute('href');
+      const isMatch = href === `#${activeId}`;
+      if (isMatch) {
+        link.classList.add('active', 'is-active');
+        link.setAttribute('aria-current', 'location');
+      } else {
+        link.classList.remove('active', 'is-active');
+        link.removeAttribute('aria-current');
+      }
+    });
+  }
+
+  /**
+   * Evaluates active section based on scroll position and viewport visibility
+   */
+  function updateActiveSectionOnScroll() {
+    if (isClickScrolling) return;
+
+    const scrollY = window.scrollY || window.pageYOffset;
+    const viewportHeight = window.innerHeight;
+    const docHeight = document.documentElement.scrollHeight;
+
+    // 1. Top of page boundary: Home is active
+    if (scrollY <= 60) {
+      setActiveNavLink('home');
+      return;
+    }
+
+    // 2. Bottom of document boundary: Final section is active
+    if (scrollY + viewportHeight >= docHeight - 60) {
+      const lastSection = trackedSections[trackedSections.length - 1];
+      if (lastSection) {
+        setActiveNavLink(lastSection.id);
+      }
+      return;
+    }
+
+    // 3. Middle sections: Determine which section is currently below the navbar
+    const navHeight = header ? header.offsetHeight : 80;
+    const threshold = navHeight + 80;
+
+    let currentSectionId = 'home';
+    for (let i = 0; i < trackedSections.length; i++) {
+      const section = trackedSections[i];
+      const rect = section.getBoundingClientRect();
+      if (rect.top <= threshold && rect.bottom > navHeight) {
+        currentSectionId = section.id;
+      }
+    }
+
+    setActiveNavLink(currentSectionId);
+  }
+
+  /**
+   * Calculates the exact scroll destination using CSS scroll-margin-top
+   */
+  function getSectionScrollTop(targetEl) {
+    if (!targetEl || targetEl.id === 'home') {
+      return 0;
+    }
+    const computedMargin = parseFloat(window.getComputedStyle(targetEl).scrollMarginTop);
+    const navMargin = !isNaN(computedMargin) && computedMargin > 0 ? computedMargin : (header ? header.offsetHeight : 80);
+    const elementRect = targetEl.getBoundingClientRect();
+    return Math.max(0, elementRect.top + window.pageYOffset - navMargin);
+  }
+
+  /**
+   * Handle completion of a click-initiated scroll
+   */
+  function onScrollFinished() {
+    isClickScrolling = false;
+    if (clickScrollTimer) {
+      clearTimeout(clickScrollTimer);
+      clickScrollTimer = null;
+    }
+    updateActiveSectionOnScroll();
+  }
+
+  /**
+   * Handle in-page navigation clicks cleanly
+   */
+  function handleLinkClick(e) {
+    const href = this.getAttribute('href');
+    if (!href || !href.startsWith('#')) return;
+
+    const targetId = href.slice(1);
+    const targetEl = document.getElementById(targetId);
+
+    // If ID does not exist on page and is not home, allow normal behavior
+    if (!targetEl && targetId !== 'home') return;
+
+    e.preventDefault();
+
+    // Close mobile menu if currently open
+    if (typeof closeMobileMenuHandler === 'function') {
+      closeMobileMenuHandler();
+    }
+
+    // Immediately update active nav state without waiting for scroll
+    setActiveNavLink(targetId);
+
+    // Lock automatic scroll tracking during programmatic animation to avoid intermediate flashing
+    isClickScrolling = true;
+    if (clickScrollTimer) clearTimeout(clickScrollTimer);
+
+    const targetY = (targetId === 'home' || !targetId) ? 0 : getSectionScrollTop(targetEl);
+
+    window.scrollTo({
+      top: targetY,
+      behavior: prefersReduced ? 'auto' : 'smooth'
+    });
+
+    if (window.location.hash !== `#${targetId}`) {
+      history.pushState(null, '', `#${targetId}`);
+    }
+
+    // Unlock after scroll finishes
+    clickScrollTimer = setTimeout(() => {
+      onScrollFinished();
+    }, prefersReduced ? 50 : 800);
+  }
+
+  // Support native 'scrollend' event for precision unlocking
+  if ('onscrollend' in window) {
+    window.addEventListener('scrollend', () => {
+      if (isClickScrolling) {
+        onScrollFinished();
+      }
+    }, { passive: true });
+  }
+
+  // Attach click handler to all in-page anchors
+  allAnchorLinks.forEach(link => {
+    link.addEventListener('click', handleLinkClick);
+  });
+
+  // Attach throttled rAF scroll listener
+  window.addEventListener('scroll', () => {
+    if (!isScrollTicking) {
+      window.requestAnimationFrame(() => {
+        updateActiveSectionOnScroll();
+        isScrollTicking = false;
+      });
+      isScrollTicking = true;
+    }
+  }, { passive: true });
+
+  // Handle window resize to recalculate active section
+  window.addEventListener('resize', () => {
+    updateActiveSectionOnScroll();
+  }, { passive: true });
+
+  // Handle initial page position and deep links
+  function handleInitialPosition() {
+    const hash = window.location.hash;
+    if (hash && hash !== '#home') {
+      const targetId = hash.slice(1);
+      const targetEl = document.getElementById(targetId);
+      if (targetEl) {
+        setActiveNavLink(targetId);
+        isClickScrolling = true;
+        if (clickScrollTimer) clearTimeout(clickScrollTimer);
+
+        const targetY = getSectionScrollTop(targetEl);
+        window.scrollTo({
+          top: targetY,
+          behavior: 'auto'
+        });
+
+        clickScrollTimer = setTimeout(() => {
+          onScrollFinished();
+        }, 300);
+        return;
+      }
+    }
+
+    // Fresh visit or at top
+    if (window.scrollY <= 60) {
+      setActiveNavLink('home');
+    } else {
+      updateActiveSectionOnScroll();
+    }
+  }
+
+  // Execute initial placement and listen for hash changes
+  handleInitialPosition();
+  window.addEventListener('load', handleInitialPosition);
+  window.addEventListener('hashchange', handleInitialPosition);
+}
+
+/**
+ * Subtle Scroll Reveal Animations (respects prefers-reduced-motion)
+ */
+function initScrollAnimations() {
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (prefersReduced) return;
+
+  const animatedElements = document.querySelectorAll('.feature-card, .workflow-step-card, .factor-card, .intro-visual-card');
+  if (!animatedElements.length) return;
+
+  const revealObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.style.opacity = '1';
+        entry.target.style.transform = 'translateY(0)';
+        revealObserver.unobserve(entry.target);
+      }
+    });
+  }, {
+    threshold: 0.12,
+    rootMargin: '0px 0px -40px 0px'
+  });
+
+  animatedElements.forEach((el, index) => {
+    el.style.opacity = '0';
+    el.style.transform = 'translateY(24px)';
+    el.style.transition = `opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1) ${index % 4 * 0.08}s, transform 0.6s cubic-bezier(0.16, 1, 0.3, 1) ${index % 4 * 0.08}s`;
+    revealObserver.observe(el);
+  });
+}
+
+/**
+ * ============================================================================
+ * Risk Intelligence — Wayanad Geographic Map & Telemetry HUD Synchronizer
+ * ============================================================================
+ */
+function initRiskIntelligenceMap() {
+  const riskSection = document.getElementById('risk-intelligence');
+  if (!riskSection) return;
+
+  const WAYANAD_SECTOR_DATA = {
+    all: {
+      name: "All Sectors (Wayanad)",
+      coords: "11.6050° N, 76.1320° E (District Corridor)",
+      riskScore: "75% High Susceptibility",
+      riskClass: "alert",
+      precipitation: "138.8 mm (Regional Mean)",
+      saturation: "72% Mean Saturation",
+      saturationClass: "alert",
+      source: "GSI Susceptibility & IMD AWS Grid",
+      model: "v2.4-convLSTM",
+      observation: "Updated 14 min ago",
+      transform: "scale(1) translate(0%, 0%)"
+    },
+    meppadi: {
+      name: "Meppadi Ridge (Chooralmala Corridor)",
+      coords: "11.5512° N, 76.1264° E • Elev: 860m",
+      riskScore: "92% Severe Hotspot",
+      riskClass: "severe",
+      precipitation: "168.4 mm (Meppadi Station W-04)",
+      saturation: "84% Critical Saturation",
+      saturationClass: "severe",
+      source: "Model v2.4-convLSTM • IMD Rain Gauge (W-04)",
+      model: "v2.4-convLSTM",
+      observation: "Updated 12 min ago",
+      transform: "scale(1.28) translate(-7%, -4%)"
+    },
+    kalpetta: {
+      name: "Kalpetta Slopes",
+      coords: "11.6050° N, 76.0830° E • Elev: 780m",
+      riskScore: "58% Moderate Risk",
+      riskClass: "moderate",
+      precipitation: "62.0 mm (Kalpetta Station)",
+      saturation: "52% Moderate Saturation",
+      saturationClass: "moderate",
+      source: "District Hydro-met Array • Model v2.4-convLSTM",
+      model: "v2.4-convLSTM",
+      observation: "Updated 24 min ago",
+      transform: "scale(1.25) translate(1%, 6%)"
+    },
+    vythiri: {
+      name: "Vythiri Pass (Thamarassery Corridor)",
+      coords: "11.5385° N, 76.0354° E • Elev: 710m",
+      riskScore: "76% High Risk",
+      riskClass: "alert",
+      precipitation: "186.2 mm (Lakkidi High-Rainfall Gauge)",
+      saturation: "79% Saturated",
+      saturationClass: "alert",
+      source: "PWD Ghat Inclinometer Array • IMD Lakkidi Gauge",
+      model: "v2.4-convLSTM",
+      observation: "Updated 10 min ago",
+      transform: "scale(1.28) translate(13%, -2%)"
+    }
+  };
+
+  const mapImg = document.getElementById('wayanadMapImg');
+  const coordsDisplay = document.getElementById('mapCoordsDisplay');
+  const hudSectorName = document.getElementById('hudSectorName');
+  const hudRiskScore = document.getElementById('hudRiskScore');
+  const hudPrecipitation = document.getElementById('hudPrecipitation');
+  const hudSaturation = document.getElementById('hudSaturation');
+  const hudDataSource = document.getElementById('hudDataSource');
+  const hudModelEngine = document.getElementById('hudModelEngine');
+  const hudObservationTime = document.getElementById('hudObservationTime');
+  const hudModeBadge = document.getElementById('hudModeBadge');
+  const mapCaptionText = document.getElementById('mapCaptionText');
+  const btnAccess = document.getElementById('btnAccessMonitoring');
+  const btnAccessText = document.getElementById('btnAccessMonitoringText');
+
+  const sectorButtons = riskSection.querySelectorAll('.filter-pills-group [data-sector]');
+  const pinMarkers = riskSection.querySelectorAll('.sector-pin-marker');
+
+  const btnToggleHazard = document.getElementById('toggleRiskLayer');
+  const btnToggleRainfall = document.getElementById('toggleRainfallLayer');
+  const layerHazard = document.getElementById('layerHazardBuffers');
+  const layerRainfall = document.getElementById('layerRainfall');
+  const layerStatusPill = document.getElementById('mapLayerStatusPill');
+  const layerStatusText = document.getElementById('mapLayerStatusText');
+
+  let activeHazardLayer = true;
+  let activeRainfallLayer = false;
+  let currentSector = 'all';
+
+  function checkUserSession() {
+    let user = null;
+    try {
+      const raw = sessionStorage.getItem('sg_user') || localStorage.getItem('sg_user');
+      if (raw) user = JSON.parse(raw);
+    } catch (e) {}
+
+    if (user) {
+      if (hudModeBadge) {
+        hudModeBadge.textContent = "Live Telemetry";
+        hudModeBadge.classList.add("live");
+      }
+      if (mapCaptionText) {
+        mapCaptionText.textContent = `Authorized telemetry active • Officer ${user.name || user.district || 'Command'}`;
+      }
+      if (btnAccess) {
+        btnAccess.href = "dashboard.html";
+        if (btnAccessText) btnAccessText.textContent = "Open Dedicated Map Console";
+      }
+    } else {
+      if (hudModeBadge) {
+        hudModeBadge.textContent = "Illustrative";
+        hudModeBadge.classList.remove("live");
+      }
+      if (mapCaptionText) {
+        mapCaptionText.textContent = "Illustrative risk visualization — sign in to access live map monitoring.";
+      }
+      if (btnAccess) {
+        btnAccess.href = "login.html?next=map.html";
+        if (btnAccessText) btnAccessText.textContent = "Access Live Map Monitoring";
+      }
+    }
+  }
+
+  function updateLayerControls() {
+    if (layerHazard) layerHazard.classList.toggle('visible', activeHazardLayer);
+    if (btnToggleHazard) btnToggleHazard.classList.toggle('active', activeHazardLayer);
+
+    if (layerRainfall) layerRainfall.classList.toggle('visible', activeRainfallLayer);
+    if (btnToggleRainfall) btnToggleRainfall.classList.toggle('active', activeRainfallLayer);
+
+    if (layerStatusPill && layerStatusText) {
+      if (activeHazardLayer && activeRainfallLayer) {
+        layerStatusText.textContent = "Hazard Buffers & 24h Rainfall Layers Active";
+        layerStatusPill.style.display = "inline-flex";
+      } else if (activeHazardLayer) {
+        layerStatusText.textContent = "Hazard Buffers Layer Active (GSI Envelope)";
+        layerStatusPill.style.display = "inline-flex";
+      } else if (activeRainfallLayer) {
+        layerStatusText.textContent = "24h Isohyet Rainfall Layer Active (IMD Network)";
+        layerStatusPill.style.display = "inline-flex";
+      } else {
+        layerStatusText.textContent = "Base Topography View (Layers Off)";
+        layerStatusPill.style.display = "inline-flex";
+      }
+    }
+  }
+
+  function applySector(sectorKey) {
+    const data = WAYANAD_SECTOR_DATA[sectorKey];
+    currentSector = sectorKey;
+
+    // 1. Update filter pill buttons
+    sectorButtons.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.sector === sectorKey);
+    });
+
+    // 2. Update interactive pins on map
+    pinMarkers.forEach(pin => {
+      pin.classList.toggle('active', pin.dataset.sector === sectorKey);
+    });
+
+    if (!data) {
+      // Missing / unsupported sector state
+      if (hudSectorName) hudSectorName.textContent = "Data unavailable";
+      if (hudRiskScore) {
+        hudRiskScore.textContent = "Data unavailable";
+        hudRiskScore.className = "hud-val";
+      }
+      if (hudPrecipitation) hudPrecipitation.textContent = "Data unavailable";
+      if (hudSaturation) {
+        hudSaturation.textContent = "Data unavailable";
+        hudSaturation.className = "hud-val";
+      }
+      if (hudDataSource) hudDataSource.textContent = "Sensor telemetry offline";
+      if (hudObservationTime) hudObservationTime.textContent = "--";
+      return;
+    }
+
+    // 3. Update map viewport (smooth pan & zoom)
+    if (mapImg) {
+      mapImg.style.transform = data.transform;
+    }
+
+    // 4. Update coordinates display in top bar
+    if (coordsDisplay) {
+      coordsDisplay.textContent = `Coordinates: ${data.coords}`;
+    }
+
+    // 5. Update Telemetry HUD metrics
+    if (hudSectorName) hudSectorName.textContent = data.name;
+    if (hudRiskScore) {
+      hudRiskScore.textContent = data.riskScore;
+      hudRiskScore.className = `hud-val ${data.riskClass}`;
+    }
+    if (hudPrecipitation) hudPrecipitation.textContent = data.precipitation;
+    if (hudSaturation) {
+      hudSaturation.textContent = data.saturation;
+      hudSaturation.className = `hud-val ${data.saturationClass}`;
+    }
+    if (hudDataSource) hudDataSource.textContent = data.source;
+    if (hudModelEngine) hudModelEngine.textContent = data.model;
+    if (hudObservationTime) hudObservationTime.textContent = data.observation;
+  }
+
+  // Attach button event listeners
+  sectorButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      applySector(btn.dataset.sector || 'all');
+    });
+  });
+
+  // Attach pin event listeners
+  pinMarkers.forEach(pin => {
+    pin.addEventListener('click', (e) => {
+      e.stopPropagation();
+      applySector(pin.dataset.sector || 'all');
+    });
+  });
+
+  // Layer toggles
+  if (btnToggleHazard) {
+    btnToggleHazard.addEventListener('click', () => {
+      activeHazardLayer = !activeHazardLayer;
+      updateLayerControls();
+    });
+  }
+
+  if (btnToggleRainfall) {
+    btnToggleRainfall.addEventListener('click', () => {
+      activeRainfallLayer = !activeRainfallLayer;
+      updateLayerControls();
+    });
+  }
+
+  // Initialize
+  checkUserSession();
+  updateLayerControls();
+  applySector('all');
+}
